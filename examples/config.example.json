@@ -1,0 +1,11 @@
+{
+  "hass_url": "http://192.168.1.10:8123",
+  "entity": "media_player.living_room",
+  "bluos": "http://192.168.1.20:11000",
+  "ssh": "user@192.168.1.10",
+  "www": "/home/user/ha-config/www",
+  "tts_base": "https://llm.example.com/v1",
+  "tts_model": "audio/tts",
+  "voice": "matilda",
+  "volume": 0.3
+}
