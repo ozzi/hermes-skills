@@ -68,11 +68,11 @@ required_environment_variables:
 
 ```json
 {
-  "hass_url": "http://192.168.1.10:8123",
+  "hass_url": "http://10.0.0.5:8123",
   "entity": "media_player.living_room",
-  "bluos": "http://192.168.1.20:11000",
-  "ssh": "user@192.168.1.10",
-  "www": "/home/user/ha-config/www",
+  "bluos": "http://10.0.0.9:11000",
+  "ssh": "pi@10.0.0.5",
+  "www": "/home/pi/ha-config/www",
   "tts_base": "https://llm.example.com/v1",
   "tts_model": "audio/tts",
   "voice": "matilda",
@@ -84,16 +84,18 @@ required_environment_variables:
 
 ```bash
 hermes_announce.py --write-config ~/.config/hermes-bluos-announce/config.json \
-  --hass-url http://192.168.1.10:8123 --entity media_player.living_room \
-  --bluos http://192.168.1.20:11000 --ssh user@192.168.1.10 \
-  --www /home/user/ha-config/www --volume 0.3
+  --hass-url http://10.0.0.5:8123 --entity media_player.living_room \
+  --bluos http://10.0.0.9:11000 --ssh pi@10.0.0.5 \
+  --www /home/pi/ha-config/www --volume 0.3
 ```
 
 **В конфиге нет секретов** — только адреса, пути и алиас TTS, поэтому его можно хранить
-в dotfiles. Секреты читаются из окружения: `HASS_TOKEN` (токен нужного инстанса HA; имя
-переопределяется `--token-env`) и `LITELLM_API_KEY` (ключ TTS; `--key-env`). Скрипт также
-подхватывает `~/.hermes/.env` профиля (`HERMES_ENV_FILE` меняет путь). Значения ключей
-никогда не печатаются.
+в dotfiles. Секреты скрипт берёт **только из переменных окружения процесса** и файлы
+с ключами не открывает: `HASS_TOKEN` (токен нужного инстанса HA; имя меняется `--token-env`)
+и `LITELLM_API_KEY` (ключ TTS; `--key-env`). В Hermes профиле эти переменные уже есть
+в окружении сессии, поэтому ничего экспортировать не нужно; при запуске из cron или
+с чужой машины — экспортировать явно. Значения ключей никогда не печатаются, а проверить
+разбор настроек без объявления можно через `--dry-run`.
 
 Env-переопределения: `HASS_ANNOUNCE_HASS_URL`, `HASS_ANNOUNCE_MEDIA_BASE`,
 `HASS_ANNOUNCE_ENTITY`, `HASS_ANNOUNCE_BLUOS`, `HASS_ANNOUNCE_SSH`, `HASS_ANNOUNCE_WWW`,
@@ -108,9 +110,9 @@ hermes_announce.py "Котлеты готовы"
 
 # или всё аргументами
 hermes_announce.py "Котлеты готовы" \
-  --hass-url http://192.168.1.10:8123 --entity media_player.living_room \
-  --bluos http://192.168.1.20:11000 \
-  --ssh user@192.168.1.10 --www /home/user/ha-config/www \
+  --hass-url http://10.0.0.5:8123 --entity media_player.living_room \
+  --bluos http://10.0.0.9:11000 \
+  --ssh pi@10.0.0.5 --www /home/pi/ha-config/www \
   --volume 0.3
 
 hermes_announce.py --voice-list          # известные голоса текущего апстрима

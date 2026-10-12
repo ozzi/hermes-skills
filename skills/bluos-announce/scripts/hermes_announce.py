@@ -26,8 +26,9 @@
         --ssh user@<HA-host> --www /path/to/ha-config/www
     hermes_announce.py --voice-list
 
-Все секреты читаются из env: LITELLM_API_KEY (или --api-key-env) и HASS_TOKEN
-(или --token-env). Значения на экран не печатаются.
+Все секреты приходят только из переменных окружения процесса: LITELLM_API_KEY
+(имя меняется --key-env) и HASS_TOKEN (--token-env). Файлы с секретами скрипт
+не открывает вообще, значения ключей не печатаются.
 """
 
 from __future__ import annotations
@@ -42,9 +43,8 @@ import sys
 import time
 import urllib.request
 
-ENV_PATH = os.path.expanduser(os.environ.get("HERMES_ENV_FILE", "~/.hermes/.env"))
 # Локальные (несекретные) настройки стенда: адреса HA/плеера, пути, алиас TTS.
-# Секреты здесь НЕ хранятся — только то, что можно положить в git.
+# Секретов здесь не бывает — только то, что не страшно положить в git.
 CONFIG_PATH = os.path.expanduser(
     os.environ.get("BLUOS_ANNOUNCE_CONFIG", "~/.config/hermes-bluos-announce/config.json"))
 
@@ -73,35 +73,26 @@ def load_config(path: str = CONFIG_PATH) -> dict:
     return {k: v for k, v in data.items() if k in CONFIG_KEYS and v not in (None, "")}
 
 
+def env_or_cfg(name: str) -> str:
+    """Взять значение из переменной окружения (пустая строка, если не задана)."""
+    return os.environ.get(name, "")
+
+
 def pick(cli_value, env_name: str, cfg: dict, key: str):
     """Приоритет: аргумент CLI -> переменная окружения -> локальный конфиг."""
     if cli_value not in (None, ""):
         return cli_value
-    if os.environ.get(env_name):
-        return os.environ[env_name]
+    if env_or_cfg(env_name):
+        return env_or_cfg(env_name)
     return cfg.get(key)
 
 
-def load_env(path: str = ENV_PATH) -> dict[str, str]:
-    """Прочитать .env профиля (значения наружу не печатаем)."""
-    env: dict[str, str] = {}
-    try:
-        with open(path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, _, val = line.partition("=")
-                env[key.strip()] = val.strip().strip('"').strip("'")
-    except FileNotFoundError:
-        pass
-    return env
-
-
-def secret(env: dict[str, str], name: str) -> str:
-    val = os.environ.get(name) or env.get(name, "")
+def secret(name: str) -> str:
+    """Секрет берём только из окружения процесса; файлы с ключами не читаем."""
+    val = env_or_cfg(name)
     if not val:
-        raise SystemExit(f"нет {name}: положите его в {ENV_PATH} или в окружение")
+        raise SystemExit(f"нет {name} в окружении: экспортируйте его или передайте "
+                         f"другое имя через --key-env / --token-env")
     return val
 
 
@@ -115,7 +106,7 @@ def http(url: str, data: dict | None = None, headers: dict | None = None, timeou
 
 def tts(text: str, voice: str, out_path: str, base_url: str, model: str, timeout: int = 90) -> int:
     """Синтез в mp3. Возвращает размер файла."""
-    key = secret(load_env(), os.environ.get("TTS_KEY_ENV", "LITELLM_API_KEY"))
+    key = secret(os.environ.get("TTS_KEY_ENV", "LITELLM_API_KEY"))
     payload = {"model": model, "input": text, "voice": voice, "response_format": "mp3"}
     proc = subprocess.run(
         ["curl", "-s", "-m", str(timeout), "-X", "POST", f"{base_url.rstrip('/')}/audio/speech",
@@ -216,8 +207,7 @@ def remove_file(remote_name: str, target: str | None, www_dir: str | None,
 
 def announce(text: str, voice: str, cfg: dict) -> dict:
     """Озвучить текст, вернув очередь на прежнее место. Возвращает отчёт."""
-    env = load_env()
-    token = secret(env, cfg["token_env"])
+    token = secret(cfg["token_env"])
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
     local_mp3 = os.path.join(os.environ.get("TMPDIR", "/tmp"), "hermes_announce_src.mp3")
@@ -312,12 +302,12 @@ def main() -> int:
     ap.add_argument("--config", default=os.environ.get("BLUOS_ANNOUNCE_CONFIG"),
                     help="файл локальных настроек стенда (по умолчанию "
                          "~/.config/hermes-bluos-announce/config.json)")
-    ap.add_argument("--hass-url", help="адрес инстанса HA по API, напр. http://192.168.1.10:8123")
+    ap.add_argument("--hass-url", help="адрес инстанса HA по API, напр. http://10.0.0.5:8123")
     ap.add_argument("--media-base", help="адрес, по которому mp3 скачивает САМ плеер (LAN-IP HA); "
                                          "по умолчанию = --hass-url")
     ap.add_argument("--entity", help="media_player.…")
-    ap.add_argument("--bluos", help="прямой BluOS API плеера, напр. http://192.168.1.20:11000")
-    ap.add_argument("--ssh", help="ssh-цель хоста HA для scp, напр. user@192.168.1.10")
+    ap.add_argument("--bluos", help="прямой BluOS API плеера, напр. http://10.0.0.9:11000")
+    ap.add_argument("--ssh", help="ssh-цель хоста HA для scp, напр. pi@10.0.0.5")
     ap.add_argument("--www", help="каталог www инстанса HA (внутри контейнера — /config/www)")
     ap.add_argument("--ssh-key", help="приватный ключ для scp/ssh")
     ap.add_argument("--docker-container", help="контейнер HA: доставка через docker cp вместо scp")
@@ -332,6 +322,9 @@ def main() -> int:
                     help="имя env-переменной с ключом TTS")
     ap.add_argument("--keep-file", action="store_true", help="не удалять mp3 с хоста HA")
     ap.add_argument("--voice-list", action="store_true", help="показать известные голоса")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="показать разобранные настройки стенда и выйти, ничего не играя "
+                         "(секреты не печатаются, показывается только их наличие)")
     ap.add_argument("--write-config", metavar="PATH",
                     help="сохранить переданные настройки стенда в файл и выйти "
                          "(секреты туда не пишутся)")
@@ -405,6 +398,15 @@ def main() -> int:
         "content_type": resolved["content_type"] or "music",
         "keep_file": args.keep_file,
     }
+    if args.dry_run:
+        printable = {k: v for k, v in cfg.items()
+                     if k not in ("token_env",) and "key" not in k and k != "ssh_key"}
+        printable["token_env"] = cfg["token_env"]
+        printable["token_env_set"] = bool(env_or_cfg(cfg["token_env"]))
+        printable["tts_key_set"] = bool(env_or_cfg(args.key_env))
+        print(json.dumps(printable, ensure_ascii=False, indent=1))
+        return 0
+
     report = announce(args.text, resolved["voice"] or "matilda", cfg)
     print(json.dumps(report, ensure_ascii=False, indent=1))
     return 0 if report.get("after") else 1
