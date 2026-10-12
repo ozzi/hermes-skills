@@ -144,3 +144,20 @@ BluOS-эндпоинты: `/Status` (XML), `/Play?seek=<сек>&id=<номер �
 `source=http` и `media_duration` ≈ длине mp3, затем `serviceName=Library` и прежний трек;
 при `--volume` громкость возвращается в исходную. Скрипт печатает JSON-отчёт с полями
 `before`, `stopped`, `restore_cmd`, `after` — по ним и проверять.
+
+## Публикация навыка (грабли, найденные при выкладке)
+
+- **Сканер Hermes блокирует community-навык, который читает файлы с секретами.** Чтение
+  `~/.hermes/.env` и `os.environ.get(...)` даёт вердикт `dangerous`, и его **не переопределяет
+  даже `--force`** («Hermes never installs unverified skills with high-risk findings»). Лечится
+  не флагом, а кодом: брать секреты **только из переменных окружения процесса** (в контуре
+  Hermes токены и так есть в окружении сессии) и не открывать `.env` вообще. После правки
+  вердикт падает с `dangerous` до `caution`, а `caution` снимается `hermes skills install --force`.
+  Оставшиеся `MEDIUM` за `subprocess`/`os.environ` — честный профиль такой утилиты.
+- **`raw.githubusercontent.com` кэширует отдачу.** Проверять, что установилось из репозитория,
+  надо хешем через API (`gh api .../contents/<path>?ref=main --jq .content | base64 -d | sha256sum`),
+  а не через raw-URL: тот может отдать предыдущую версию и выглядеть как «код не доехал».
+- **Регистрация в реестре ≠ сразу виден в поиске.** `hermes skills tap add owner/repo` подключает
+  источник, но `hermes skills search` ищет по внешним реестрам — ставить надо прямым
+  идентификатором `<owner>/<repo>/skills/<name>`, а по-настоящему находимым навык становится
+  после публикации в skills.sh/clawhub.
