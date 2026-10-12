@@ -1,0 +1,4 @@
+{
+  "hass_url": "http://192.168.1.10:8123",
+  "entity": "media_player.yandex_station"
+}

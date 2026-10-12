@@ -18,19 +18,25 @@ hermes skills install ozzi/hermes-skills/skills/bluos-announce
 | Навык | Зачем |
 |---|---|
 | [`bluos-announce`](skills/bluos-announce/SKILL.md) | Озвучить текст на плеере Bluesound/BluOS через Home Assistant, не потеряв очередь воспроизведения |
+| [`alice-announce`](skills/alice-announce/SKILL.md) | Заставить Яндекс Станцию произнести текст голосом Алисы через Home Assistant (режимы text/command/dialog, спецэффекты, обход лимита 100 символов) |
 
 ## Структура
 
 ```
 skills/
-└── bluos-announce/
-    ├── SKILL.md              # инструкции, грабли, проверка результата
+├── bluos-announce/
+│   ├── SKILL.md              # инструкции, грабли, проверка результата
+│   └── scripts/
+│       └── hermes_announce.py
+└── alice-announce/
+    ├── SKILL.md              # режимы play_media, спецэффекты, диагностика
     └── scripts/
-        └── hermes_announce.py
+        └── alice_say.py
+examples/                     # примеры файлов настроек (без секретов)
 skills.sh.json                # группировки для Skills Hub
 ```
 
-Навык самодостаточен: никаких секретов и адресов конкретного стенда в репозитории нет.
+Навыки самодостаточны: никаких секретов и адресов конкретного стенда в репозитории нет.
 Адреса и пути задаются аргументами, переменными окружения или локальным файлом настроек
 (см. раздел «Настройка» в SKILL.md), секреты — только из окружения.
 
