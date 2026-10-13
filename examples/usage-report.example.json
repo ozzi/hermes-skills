@@ -1,0 +1,12 @@
+{
+  "sources": {
+    "openrouter": {"enabled": true, "title": "Опенроутер"},
+    "deepseek": {"enabled": false, "title": "Дипсик"}
+  },
+  "convert": "RUB",
+  "skip_dates": ["2027-01-01", "2027-01-07"],
+  "announce": {
+    "script": "~/.hermes/scripts/hermes_announce.py",
+    "args": ["--volume", "0.3"]
+  }
+}

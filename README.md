@@ -19,6 +19,7 @@ hermes skills install ozzi/hermes-skills/skills/bluos-announce
 |---|---|
 | [`bluos-announce`](skills/bluos-announce/SKILL.md) | Озвучить текст на плеере Bluesound/BluOS через Home Assistant, не потеряв очередь воспроизведения |
 | [`alice-announce`](skills/alice-announce/SKILL.md) | Заставить Яндекс Станцию произнести текст голосом Алисы через Home Assistant (режимы text/command/dialog, спецэффекты, обход лимита 100 символов) |
+| [`usage-report`](skills/usage-report/SKILL.md) | Расход, токены и остаток баланса провайдеров (OpenRouter и другие) русской фразой на озвучку; календарь рабочих дней, догон пропущенных суток, ежедневное задание |
 
 ## Структура
 
@@ -28,10 +29,15 @@ skills/
 │   ├── SKILL.md              # инструкции, грабли, проверка результата
 │   └── scripts/
 │       └── hermes_announce.py
-└── alice-announce/
-    ├── SKILL.md              # режимы play_media, спецэффекты, диагностика
+├── alice-announce/
+│   ├── SKILL.md              # режимы play_media, спецэффекты, диагностика
+│   └── scripts/
+│       └── alice_say.py
+└── usage-report/
+    ├── SKILL.md              # ручки провайдеров, календарь озвучки, расширение
     └── scripts/
-        └── alice_say.py
+        ├── usage_report.py           # сбор данных → русская фраза → вызов озвучки
+        └── usage_report_announce.sh  # обёртка ежедневного задания (молчит при успехе)
 examples/                     # примеры файлов настроек (без секретов)
 skills.sh.json                # группировки для Skills Hub
 ```
