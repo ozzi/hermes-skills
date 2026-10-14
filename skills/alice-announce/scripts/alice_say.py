@@ -142,8 +142,10 @@ def main() -> int:
     p.add_argument("--config", default=CONFIG_PATH, help=f"address config file (default {CONFIG_PATH})")
     p.add_argument("--hass-url", help="HA base URL, e.g. http://10.0.0.5:8123")
     p.add_argument("--entity", help="media_player entity of the speaker (auto-detected otherwise)")
-    p.add_argument("--token-env", default="HASS_TOKEN",
-                   help="name of the environment variable holding the HA token (default HASS_TOKEN)")
+    p.add_argument("--token-env", default=None,
+                   help="name of the environment variable holding the HA token "
+                        "(default: $ALICE_TOKEN_ENV, then 'token_env' in the config, "
+                        "then HASS_TOKEN)")
     p.add_argument("--mode", default="text", choices=("text", "command", "dialog"),
                    help="text = speak it; command = run it as an Alice command; "
                         "dialog = speak and keep listening (local mode only)")
@@ -162,7 +164,11 @@ def main() -> int:
     url = pick(args.hass_url, os.environ.get("ALICE_HA_URL"), cfg.get("hass_url"),
                os.environ.get("HASS_URL"))
     entity = pick(args.entity, os.environ.get("ALICE_ENTITY"), cfg.get("entity"))
-    token = os.environ.get(args.token_env)
+    # Имя переменной с токеном тоже настраивается: ядро Hermes вырезает HASS_TOKEN
+    # из окружения дочерних процессов, поэтому рабочее имя задаётся в конфиге.
+    token_env = pick(args.token_env, os.environ.get("ALICE_TOKEN_ENV"),
+                     cfg.get("token_env"), "HASS_TOKEN")
+    token = os.environ.get(token_env)
 
     if args.write_config:
         if not url and not entity:
@@ -171,7 +177,8 @@ def main() -> int:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             json.dump({k: v for k, v in
-                       {"hass_url": url, "entity": entity}.items() if v},
+                       {"hass_url": url, "entity": entity,
+                        "token_env": args.token_env}.items() if v},
                       fh, ensure_ascii=False, indent=2)
         print(f"written: {path} (no secrets inside)")
         return 0
@@ -180,13 +187,13 @@ def main() -> int:
         raise SystemExit("no HA URL: pass --hass-url, set ALICE_HA_URL/HASS_URL, "
                          f"or put hass_url into {args.config}")
     if not token:
-        raise SystemExit(f"no HA token in the environment: set {args.token_env} "
+        raise SystemExit(f"no HA token in the environment: set {token_env} "
                          "(secrets are never read from files)")
 
     ha = HA(url, token)
     if args.dry_run and not args.text:
         print(json.dumps({"hass_url": url, "entity": entity or "(auto-detect needs HA)",
-                          "token_env": args.token_env}, ensure_ascii=False, indent=1))
+                          "token_env": token_env}, ensure_ascii=False, indent=1))
         return 0
 
     # effects imply dialog mode; do this before any payload is built

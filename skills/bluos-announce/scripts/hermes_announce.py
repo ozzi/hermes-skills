@@ -58,7 +58,8 @@ DEFAULT_VOICES = ["matilda", "george", "sarah", "alice", "bella", "brian", "char
                   "daniel", "jessica", "laura", "lily", "river", "roger", "will"]
 
 CONFIG_KEYS = ("hass_url", "media_base", "entity", "bluos", "ssh", "www", "ssh_key",
-               "container", "tts_base", "tts_model", "voice", "volume", "content_type")
+               "container", "tts_base", "tts_model", "voice", "volume", "content_type",
+               "token_env")
 
 
 def load_config(path: str = CONFIG_PATH) -> dict:
@@ -316,8 +317,10 @@ def main() -> int:
     ap.add_argument("--voice", help="голос (по умолчанию matilda, см. --voice-list)")
     ap.add_argument("--volume", type=float, help="громкость 0..1 перед объявлением")
     ap.add_argument("--content-type", help="media_content_type (по умолчанию music)")
-    ap.add_argument("--token-env", default="HASS_TOKEN",
-                    help="имя env-переменной с токеном нужного инстанса HA")
+    ap.add_argument("--token-env", default=None,
+                    help="имя env-переменной с токеном нужного инстанса HA "
+                         "(по умолчанию $HASS_ANNOUNCE_TOKEN_ENV, затем token_env "
+                         "из локального конфига, затем HASS_TOKEN)")
     ap.add_argument("--key-env", default="LITELLM_API_KEY",
                     help="имя env-переменной с ключом TTS")
     ap.add_argument("--keep-file", action="store_true", help="не удалять mp3 с хоста HA")
@@ -342,6 +345,7 @@ def main() -> int:
             "bluos": args.bluos, "ssh": args.ssh, "www": args.www, "ssh_key": args.ssh_key,
             "container": args.docker_container, "tts_base": args.base_url, "tts_model": args.model,
             "voice": args.voice, "volume": args.volume, "content_type": args.content_type,
+            "token_env": args.token_env,
         }
         to_save = {k: v for k, v in to_save.items() if v not in (None, "")}
         path = os.path.expanduser(args.write_config)
@@ -382,6 +386,10 @@ def main() -> int:
                  + f" (аргумент, переменная окружения или {CONFIG_PATH})")
 
     os.environ["TTS_KEY_ENV"] = args.key_env
+    # Имя переменной с токеном берём оттуда же, откуда адреса: аргумент → окружение →
+    # локальный конфиг. Ядро Hermes вырезает HASS_TOKEN из дочерних процессов, поэтому
+    # в конфиге стенда живёт рабочее имя, а не зашитый по умолчанию вариант.
+    token_env = pick(args.token_env, "HASS_ANNOUNCE_TOKEN_ENV", cfg_file, "token_env") or "HASS_TOKEN"
     cfg = {
         "hass_url": resolved["hass_url"],
         "media_base": resolved["media_base"] or resolved["hass_url"],
@@ -393,7 +401,7 @@ def main() -> int:
         "container": resolved["container"] or None,
         "base_url": resolved["tts_base"],
         "model": resolved["tts_model"] or "audio/tts",
-        "token_env": args.token_env,
+        "token_env": token_env,
         "volume": resolved["volume"],
         "content_type": resolved["content_type"] or "music",
         "keep_file": args.keep_file,

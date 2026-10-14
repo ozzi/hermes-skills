@@ -15,8 +15,11 @@ out=$(/usr/bin/env python3 "$SCRIPT" "${1:-auto}" --announce 2>&1)
 rc=$?
 printf '%s | rc=%s | %s\n' "$(date -Is)" "$rc" "$(printf '%s' "$out" | tr '\n' ' ')" >> "$LOG"
 
+# Озвучка может сорваться с кодом 0 (скрипт вернул отчёт без признака успеха),
+# поэтому мало смотреть на rc: отдельно требуем подтверждение ok=True.
 if [ "$rc" -ne 0 ] \
-  || printf '%s' "$out" | grep -qiE 'Traceback|данных нет|! [[:alpha:]]|озвучка: rc=[^0]'; then
+  || printf '%s' "$out" | grep -qiE 'Traceback|данных нет|! [[:alpha:]]' \
+  || ! printf '%s' "$out" | grep -q 'ok=True'; then
   printf '%s\n' "$out"
   exit 1
 fi

@@ -1,7 +1,7 @@
 ---
 name: alice-announce
 description: Use when making a Yandex Station say text with Alice's voice via HA.
-version: 1.0.0
+version: 1.1.0
 author: Hermes Agent
 license: MIT
 platforms: [linux, macos]
@@ -10,7 +10,7 @@ metadata:
     tags: [alice, yandex-station, yandexstation, home-assistant, tts, media_player, announce]
     related_skills: [bluos-announce]
 required_environment_variables:
-  - name: HASS_TOKEN
+  - name: ANNOUNCE_HA_TOKEN
     prompt: "Long-lived token of the Home Assistant instance the speaker is connected to"
     required_for: "calling media_player.play_media through the HA API"
 ---
@@ -129,7 +129,27 @@ rather than by hand. A ready-made example ships in `examples/config.example.json
 collection repository.
 
 The token is read **only from the process environment** — the script never opens secret files.
-Name it with `--token-env` (default `HASS_TOKEN`); secrets are never printed.
+Secrets are never printed.
+
+**Name the variable with `--token-env`, and keep that name in the config.** The Hermes core
+strips `HASS_TOKEN` (and `HASS_URL`) from the environment of **every** child process — terminal,
+`execute_code`, cron scripts — because Home Assistant moved out of the core into a catalog
+plugin. A hardcoded default therefore works in a hand-run shell and fails silently everywhere
+the agent calls it. So the resolved name comes from: `--token-env` → `$ALICE_TOKEN_ENV` →
+`token_env` in the config → `HASS_TOKEN`. Put your working name (e.g. `ANNOUNCE_HA_TOKEN`) into
+the config once and the agent stops needing the flag:
+
+```json
+{
+  "hass_url": "https://ha.example.com",
+  "entity": "media_player.yandex_station",
+  "token_env": "ANNOUNCE_HA_TOKEN"
+}
+```
+
+`terminal.env_passthrough` is not needed for such a custom name, and `HASS_TOKEN` cannot be
+declared there at all — the sanitizer refuses operator config that would lift the seal.
+Symptom of the stripped default: `no HA token in the environment: set HASS_TOKEN`.
 
 ## Pitfalls
 

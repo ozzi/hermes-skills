@@ -1,4 +1,5 @@
 {
   "hass_url": "http://192.168.1.10:8123",
-  "entity": "media_player.yandex_station"
+  "entity": "media_player.yandex_station",
+  "token_env": "ANNOUNCE_HA_TOKEN"
 }
