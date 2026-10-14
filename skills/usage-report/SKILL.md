@@ -1,7 +1,7 @@
 ---
 name: usage-report
 description: Use when reporting provider spend/tokens/balance and speaking it aloud. Extensible per-provider collectors → Russian phrase → TTS announce.
-version: 1.2.0
+version: 1.3.0
 author: Alexander Zhukov
 license: MIT
 platforms: [linux, macos]
@@ -170,6 +170,13 @@ execute_code, cron-скрипты) — так HA вынесли из ядра в
 Симптом молчаливого отказа: отчёт считается, а строка лога содержит
 `озвучка: rc=1 ok=False нет HASS_TOKEN в окружении`. Тот же дефект бьёт по **любому**
 вызову `hermes_announce.py`/`alice_say.py` из сессии агента, а не только по cron.
+
+## Доставка правок в репозиторий
+
+Навык установлен как tap из `ozzi/hermes-skills`: **папка навыка — это чекаут репозитория, а не
+место для правок**. Правка в ней исчезнет при следующем `hermes skills install`, включая правку,
+которой починили сбой. Порядок переноса и грабли выкладки (нейтральные адреса, пуш через URL
+с токеном, `diff` после переустановки) — в разделе «Публикация навыка» навыка `bluos-announce`.
 
 ## Регулярный запуск
 
