@@ -1,7 +1,7 @@
 ---
 name: usage-report
 description: Use when reporting provider spend/tokens/balance and speaking it aloud. Extensible per-provider collectors → Russian phrase → TTS announce.
-version: 1.3.0
+version: 1.4.0
 author: Alexander Zhukov
 license: MIT
 platforms: [linux, macos]
@@ -13,6 +13,12 @@ required_environment_variables:
   - name: OPENROUTER_MGMT_KEY
     prompt: "Management key OpenRouter (openrouter.ai/settings/management-keys) — читает баланс и аналитику"
     required_for: "расход и остаток баланса OpenRouter"
+  - name: DEEPSEEK_API_KEY
+    prompt: "Ключ аккаунта DeepSeek (platform.deepseek.com) — читает остаток баланса"
+    required_for: "баланс Дипсика (свой ключ, не тот, что лежит в credential шлюза)"
+  - name: LITELLM_ADMIN_KEY
+    prompt: "Admin-ключ LiteLLM — читает SpendLogs шлюза"
+    required_for: "токены и трата Дипсика (у самого провайдера ручки расхода нет)"
 ---
 
 # Отчёт о расходе и балансе с озвучкой
@@ -54,6 +60,45 @@ Management-ключ **unscoped** — это документированное �
 
 Метрики и измерения для запроса — в `GET /api/v1/analytics/meta`. Числа в ответе приходят
 **строками** — приводить явно.
+
+### Дипсик: баланс своей ручкой, расход и токены — из журнала шлюза
+
+У DeepSeek **нет** ручки расхода: платформа не отдаёт ни историю трат, ни счётчики токенов
+(ни в API, ни в консоли). Поэтому источник `deepseek` собирается из двух мест:
+
+| Часть | Откуда | Ключ |
+|---|---|---|
+| `balance` | `GET https://api.deepseek.com/user/balance` → `balance_infos[].total_balance` (валюта — из того же ответа, бывает `CNY`) | `DEEPSEEK_API_KEY` (свой ключ аккаунта, **не** тот, что лежит в credential шлюза) |
+| `spend`, `tokens`, `requests` | SpendLogs LiteLLM: `GET /spend/logs/v2?start_date=&end_date=&page=&page_size=`, строки фильтруются по `custom_llm_provider` | `LITELLM_ADMIN_KEY` |
+
+Почему именно фильтр по провайдеру: под одним алиасом живут разные ветки маршрута (прямой
+DeepSeek в `order: 1`, агрегатор в `order: 2`), и только `custom_llm_provider` в строке
+отделяет расход Дипсика от расхода агрегатора. Считать расход Дипсика по разнице баланса
+нельзя: баланс двигают и пополнения.
+
+Что нужно, чтобы цифры появились: ручка журнала должна быть **выставлена наружу** прокси
+(по умолчанию фасад отвечает на неё `404`), а в конфиге источника — блок `ledger`:
+
+```json
+"sources": {
+  "deepseek": {
+    "enabled": true,
+    "title": "Дипсик",
+    "ledger": {
+      "enabled": true,
+      "key_env": "LITELLM_ADMIN_KEY",
+      "base_url": "https://llm.outzzz.tech",
+      "provider": "deepseek",
+      "date_format": "%Y-%m-%d %H:%M:%S"
+    }
+  }
+}
+```
+
+Без блока `ledger` (или когда ручка недоступна) источник отдаёт **только баланс**, пишет
+строку в stderr и не ломает остальные источники: фраза просто не упоминает расход.
+`date_format` — потому что формат дат у ручки не документирован и уточняется одной правкой
+конфига по первому же ответу, а не правкой кода.
 
 ## Периоды и календарь озвучки
 
@@ -142,7 +187,9 @@ usage_report.py --write-config ~/.config/hermes-usage-report/config.json --sourc
 ```json
 {
   "sources": {"openrouter": {"enabled": true, "title": "Опенроутер"},
-              "deepseek": {"enabled": false, "title": "Дипсик"}},
+              "deepseek": {"enabled": true, "title": "Дипсик",
+                           "ledger": {"enabled": true, "key_env": "LITELLM_ADMIN_KEY",
+                                      "base_url": "https://llm.outzzz.tech"}}},
   "convert": "RUB",
   "skip_dates": ["2027-01-01", "2027-01-07"],
   "announce": {"script": "~/.hermes/scripts/hermes_announce.py", "args": ["--volume", "0.3"]}
@@ -224,7 +271,9 @@ execute_code, cron-скрипты) — так HA вынесли из ядра в
 - **Смена дня на границе озвучки.** Отчёт за вчера в 08:00 и «за сегодня» в том же запуске —
   разные окна; не смешивай их в одной фразе.
 - **Источник без части полей — норма.** Не заставляй фразу произносить нулевой расход там, где API
-  периода не умеет (у DeepSeek публичной ручки расхода нет — только баланс).
+  периода не умеет (у DeepSeek своей ручки расхода нет — расход берётся из журнала шлюза, см. раздел
+  выше). Если ручка журнала недоступна, правильный ответ — баланс без расхода и строка в stderr,
+  а не выдуманное число и не попытка посчитать расход по разнице баланса.
 - **Голос TTS привязан к модели за алиасом**, а не к алиасу: при смене апстрима старый голос даёт
   `400 Unknown voice` и выглядит как поломка всего пайплайна.
 - **Озвучка — побочный эффект, а не проверка.** Тестовый прогон с `--announce` звучит на живой
