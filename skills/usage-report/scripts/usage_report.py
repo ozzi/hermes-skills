@@ -30,6 +30,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 
 CONFIG_PATH = os.path.expanduser(
@@ -279,6 +280,49 @@ def secret(key_env: str) -> str:
     return val
 
 
+def ledger_window(ledger: dict, window: tuple) -> dict:
+    """Токены, трата и число запросов за окно по журналу шлюза (SpendLogs).
+
+    Строки журнала несут и провайдера (`custom_llm_provider`), и разбивку токенов,
+    поэтому фильтр по провайдеру отделяет расход одной ветки маршрута от соседней.
+    Формат дат у ручки не документирован и зависит от сборки — он вынесен в
+    `date_format`, чтобы подстроить его одной правкой конфига, не трогая код.
+    """
+    key = secret(ledger["key_env"])
+    base = (ledger.get("base_url") or "").rstrip("/")
+    if not base:
+        raise SourceError("не задан ledger.base_url")
+    path = ledger.get("path") or "/spend/logs/v2"
+    fmt = ledger.get("date_format") or "%Y-%m-%d %H:%M:%S"
+    size = int(ledger.get("page_size") or 200)
+    provider = str(ledger.get("provider") or "deepseek").lower()
+    query = {"start_date": window[0].strftime(fmt), "end_date": window[1].strftime(fmt),
+             "page_size": size}
+    spend, tokens, requests = 0.0, 0, 0
+    page = 1
+    seen = 0
+    while page <= int(ledger.get("max_pages") or 50):
+        body = http_json(f"{base}{path}?{urlencode({**query, 'page': page})}", key)
+        rows = body.get("data") or body.get("logs") or []
+        if not isinstance(rows, list) or not rows:
+            break
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("custom_llm_provider") or "").lower() != provider:
+                continue
+            spend += float(row.get("spend") or 0)
+            tokens += int(float(row.get("total_tokens") or 0))
+            requests += 1
+        seen += len(rows)
+        if len(rows) < size:
+            break
+        page += 1
+    if not seen:
+        raise SourceError("журнал не отдал строк за окно")
+    return {"spend": round(spend, 6), "tokens": tokens, "requests": requests}
+
+
 @source("openrouter", "OPENROUTER_MGMT_KEY", "Опенроутер")
 def collect_openrouter(cfg: dict, window: tuple, now: datetime) -> dict:
     """Расход за окно + остаток баланса аккаунта.
@@ -316,9 +360,14 @@ def collect_openrouter(cfg: dict, window: tuple, now: datetime) -> dict:
 
 @source("deepseek", "DEEPSEEK_API_KEY", "Дипсик")
 def collect_deepseek(cfg: dict, window: tuple, now: datetime) -> dict:
-    """Только баланс: публичной ручки расхода за период у DeepSeek нет.
+    """Баланс — своя ручка провайдера, расход и токены — из журнала шлюза.
 
-    Образец источника без части полей — фраза не упоминает отсутствующее.
+    Публичной ручки расхода за период у DeepSeek нет: платформа не отдаёт ни
+    историю трат, ни счётчики токенов, поэтому расход и токены считает LiteLLM по
+    своим SpendLogs, отфильтрованным по `custom_llm_provider` (под одним алиасом
+    живут разные провайдеры, и фильтр по провайдеру — то, что отделяет расход
+    Дипсика от расхода агрегатора). Без блока `ledger` в конфиге источник отдаёт
+    только баланс, и фраза не упоминает расход.
     """
     key = secret(cfg["key_env"])
     base = (cfg.get("base_url") or "https://api.deepseek.com").rstrip("/")
@@ -326,9 +375,17 @@ def collect_deepseek(cfg: dict, window: tuple, now: datetime) -> dict:
     if not infos:
         raise SourceError("пустой ответ /user/balance")
     info = infos[0]
-    return {"title": cfg.get("title", "Дипсик"),
+    item = {"title": cfg.get("title", "Дипсик"),
             "currency": info.get("currency") or cfg.get("currency", "USD"),
-            "balance": float(info.get("total_balance") or 0)}
+            "balance": float(info.get("total_balance") or 0),
+            "window": [window[0].isoformat(), window[1].isoformat()]}
+    ledger = cfg.get("ledger") or {}
+    if ledger.get("enabled"):
+        try:
+            item.update(ledger_window(ledger, window))
+        except Exception as exc:  # noqa: BLE001
+            print(f"дипсик: журнал шлюза недоступен — {exc}", file=sys.stderr)
+    return item
 
 
 # --------------------------------------------------------------------------- #
