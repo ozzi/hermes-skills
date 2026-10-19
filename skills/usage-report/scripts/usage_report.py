@@ -280,24 +280,54 @@ def secret(key_env: str) -> str:
     return val
 
 
+def ledger_row_time(row: dict):
+    """Момент запроса из строки журнала — для точной обрезки по границам окна.
+
+    `startTime` у LiteLLM в UTC без зоны (например `2026-10-17T06:14:55`), поэтому
+    наивное время трактуем как UTC. Нечитаемое время — None: такая строка остаётся
+    в выборке, потому что серверный диапазон и так ограничен сутками.
+    """
+    raw = row.get("startTime") or row.get("start_time") or row.get("endTime") or ""
+    if not isinstance(raw, str) or not raw:
+        return None
+    text = raw.strip().replace("Z", "+00:00")
+    try:
+        ts = datetime.fromisoformat(text.replace(" ", "T"))
+    except ValueError:
+        return None
+    return ts.replace(tzinfo=timezone.utc) if ts.tzinfo is None else ts.astimezone(timezone.utc)
+
+
 def ledger_window(ledger: dict, window: tuple) -> dict:
     """Токены, трата и число запросов за окно по журналу шлюза (SpendLogs).
 
     Строки журнала несут и провайдера (`custom_llm_provider`), и разбивку токенов,
     поэтому фильтр по провайдеру отделяет расход одной ветки маршрута от соседней.
-    Формат дат у ручки не документирован и зависит от сборки — он вынесен в
-    `date_format`, чтобы подстроить его одной правкой конфига, не трогая код.
+
+    У ручки день-гранулярный диапазон, и `end_date` в нём **исключающий**: запрос
+    с `start_date == end_date` отдаёт пустой список. Поэтому на сервер уходит
+    `[начало окна, конец окна + 1 день)`, а точные границы (у «вчера» конец — это
+    ровно полночь) добираются фильтром по `startTime` уже на клиенте.
+
+    Формат дат вынесен в `date_format`: он зависит от сборки, и подстроить его
+    можно правкой конфига, не трогая код. Пагинация — `page_size`/`page`
+    (`limit`/`offset` ручка игнорирует).
     """
     key = secret(ledger["key_env"])
     base = (ledger.get("base_url") or "").rstrip("/")
     if not base:
         raise SourceError("не задан ledger.base_url")
     path = ledger.get("path") or "/spend/logs/v2"
-    fmt = ledger.get("date_format") or "%Y-%m-%d %H:%M:%S"
+    fmt = ledger.get("date_format") or "%Y-%m-%d"
     size = int(ledger.get("page_size") or 200)
     provider = str(ledger.get("provider") or "deepseek").lower()
-    query = {"start_date": window[0].strftime(fmt), "end_date": window[1].strftime(fmt),
+    start_at, end_at = window[0], window[1]
+    if end_at <= start_at:
+        return {"spend": 0.0, "tokens": 0, "requests": 0}
+    query = {"start_date": start_at.strftime(fmt),
+             "end_date": (end_at + timedelta(days=1)).strftime(fmt),
              "page_size": size}
+    lo, hi = start_at.astimezone(timezone.utc), end_at.astimezone(timezone.utc)
     spend, tokens, requests = 0.0, 0, 0
     page = 1
     seen = 0
@@ -311,6 +341,9 @@ def ledger_window(ledger: dict, window: tuple) -> dict:
                 continue
             if str(row.get("custom_llm_provider") or "").lower() != provider:
                 continue
+            ts = ledger_row_time(row)
+            if ts is not None and not (lo <= ts < hi):
+                continue                       # соседние сутки из серверного диапазона
             spend += float(row.get("spend") or 0)
             tokens += int(float(row.get("total_tokens") or 0))
             requests += 1
@@ -318,8 +351,10 @@ def ledger_window(ledger: dict, window: tuple) -> dict:
         if len(rows) < size:
             break
         page += 1
+    # Пустой журнал — это нулевая трата, а не сбой: сетевые и HTTP-ошибки уже
+    # поднялись исключением выше. Иначе источник молчал бы про расход вообще.
     if not seen:
-        raise SourceError("журнал не отдал строк за окно")
+        return {"spend": 0.0, "tokens": 0, "requests": 0}
     return {"spend": round(spend, 6), "tokens": tokens, "requests": requests}
 
 
@@ -383,8 +418,13 @@ def collect_deepseek(cfg: dict, window: tuple, now: datetime) -> dict:
     if ledger.get("enabled"):
         try:
             item.update(ledger_window(ledger, window))
+            # У журнала шлюза суммы в долларах (LiteLLM считает стоимость в USD),
+            # а у DeepSeek баланс в юанях — это разные валюты в одной строке,
+            # поэтому у каждой своя подпись. Иначе юани выдавались бы за доллары.
+            item["spend_currency"] = ledger.get("spend_currency") or "USD"
         except Exception as exc:  # noqa: BLE001
             print(f"дипсик: журнал шлюза недоступен — {exc}", file=sys.stderr)
+    item["balance_currency"] = info.get("currency") or cfg.get("currency", "USD")
     return item
 
 
@@ -415,18 +455,20 @@ def compose(items: list[dict], phrase: str, convert: str | None = None) -> str:
     sentences = []
     for it in items:
         bits = [f"{it['title']}: {phrase}"]
+        spend_cur = it.get("spend_currency") or it.get("currency", "USD")
+        balance_cur = it.get("balance_currency") or it.get("currency", "USD")
         if it.get("spend") is not None:
             if not it["spend"] and not it.get("requests"):
                 bits.append("расхода не было")      # нулевая трата ≠ «потрачено ноль долларов»
             else:
-                bits.append(f"потрачено {ru_money(it['spend'], it.get('currency', 'USD'))}")
+                bits.append(f"потрачено {ru_money(it['spend'], spend_cur)}")
         if it.get("tokens"):
             bits.append("сожжено " + ru_tokens(it["tokens"]))
         if it.get("balance") is not None:
-            bits.append("остаток баланса — " + ru_money(it["balance"], it.get("currency", "USD")))
+            bits.append("остаток баланса — " + ru_money(it["balance"], balance_cur))
         line = ", ".join(bits) + "."
-        if convert and it.get("spend") and it.get("currency", "USD") != convert:
-            rate = cbr_rate(it.get("currency", "USD"))
+        if convert and it.get("spend") and spend_cur != convert:
+            rate = cbr_rate(spend_cur)
             if rate:
                 line += (" По курсу ЦБ это примерно "
                          + ru_money(it["spend"] * rate, convert) + ".")

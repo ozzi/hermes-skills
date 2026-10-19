@@ -7,13 +7,19 @@
 # (пустой stdout = задание ничего не отправило).
 set -uo pipefail
 
-SCRIPT="$HOME/.hermes/scripts/usage_report.py"
+SCRIPT="$(dirname "$0")/usage_report.py"
 LOG="$HOME/.hermes/cron/output/usage-report.log"
 mkdir -p "$(dirname "$LOG")"
 
 out=$(/usr/bin/env python3 "$SCRIPT" "${1:-auto}" --announce 2>&1)
 rc=$?
 printf '%s | rc=%s | %s\n' "$(date -Is)" "$rc" "$(printf '%s' "$out" | tr '\n' ' ')" >> "$LOG"
+
+# Тишина по замыслу (выходной, skip_dates) — это тоже успех: скрипт возвращает 0 и
+# ничего не печатает. Раньше такой прогон падал в «нет ok=True» и выглядел сбоем.
+if [ "$rc" -eq 0 ] && [ -z "$out" ]; then
+  exit 0
+fi
 
 # Озвучка может сорваться с кодом 0 (скрипт вернул отчёт без признака успеха),
 # поэтому мало смотреть на rc: отдельно требуем подтверждение ok=True.
