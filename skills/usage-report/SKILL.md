@@ -1,7 +1,7 @@
 ---
 name: usage-report
 description: Use when reporting provider spend/tokens/balance and speaking it aloud. Extensible per-provider collectors → Russian phrase → TTS announce.
-version: 1.5.0
+version: 1.5.1
 author: Alexander Zhukov
 license: MIT
 platforms: [linux, macos]
@@ -350,6 +350,10 @@ execute_code, cron-скрипты) — так HA вынесли из ядра в
 - **Токен озвучки под блокированным именем молчит на всех поверхностях сразу.** Отчёт при этом
   считается и алерт приходит в чат — выглядит как «сломалась только колонка». Первым делом
   сверь имя переменной в `announce.args` с блок-листом ядра, а не ищи проблему в HA или TTS.
+- **У `/user/balance` несколько кошельков, и первый в списке бывает пустым.** Аккаунт отдаёт
+  `balance_infos` с разными валютами (встречалось `USD 0.00` первым и `CNY 75.60` вторым), поэтому
+  `infos[0]` даёт ложное «остаток баланса — ноль долларов». Берётся первый **непустой** кошелёк, а
+  когда пусты все — первый (честный ноль). Валюту произносить из того же элемента: CNY ≠ USD.
 - **Симлинк в `scripts/` не годится как скрипт задания.** Планировщик делает `resolve()` и сравнивает
   с `$HERMES_HOME/scripts`: стрелка в дерево навыка даёт
   `Blocked: script path resolves outside the scripts directory`, задание падает ещё до запуска

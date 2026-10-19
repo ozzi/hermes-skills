@@ -409,10 +409,19 @@ def collect_deepseek(cfg: dict, window: tuple, now: datetime) -> dict:
     infos = http_json(f"{base}/user/balance", key).get("balance_infos") or []
     if not infos:
         raise SourceError("пустой ответ /user/balance")
-    info = infos[0]
+    # Кошельков у аккаунта несколько (USD и CNY), и первый в списке легко оказывается
+    # пустым: тогда отчёт говорит «ноль долларов», хотя деньги лежат в соседней валюте.
+    # Берём первый непустой, и только если пусты все — первый (честный ноль).
+    def _amount(entry: dict) -> float:
+        try:
+            return float(entry.get("total_balance") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    info = next((entry for entry in infos if _amount(entry) > 0), infos[0])
     item = {"title": cfg.get("title", "Дипсик"),
             "currency": info.get("currency") or cfg.get("currency", "USD"),
-            "balance": float(info.get("total_balance") or 0),
+            "balance": _amount(info),
             "window": [window[0].isoformat(), window[1].isoformat()]}
     ledger = cfg.get("ledger") or {}
     if ledger.get("enabled"):
