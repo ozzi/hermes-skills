@@ -51,6 +51,13 @@ CONFIG_PATH = os.path.expanduser(
 REMOTE_NAME = "hermes_announce.mp3"
 END_MARGIN = 0.7      # за сколько секунд до конца конца потока глушить
 PLAY_TIMEOUT = 30.0   # максимум ожидания начала/конца потока
+START_GRACE = 4.0     # сколько ждать начала потока, прежде чем решить «не началось»
+STOP_GRACE = 1.0      # сколько ждать подтверждения /Stop в состоянии плеера
+
+# Внешние входы: BluOS держит их в state=play/stream часами при выключенном телевизоре,
+# но воспроизведением это не является. Их serviceName пуст (у своей очереди — Library,
+# TuneIn, …), поэтому признак «играло» — не только state, но и непустой serviceName.
+EXTERNAL_INPUTS = {"capture", "hdmi", "arc", "optical", "analog", "bluetooth", "tv", "spdif"}
 
 # Голоса зависят от модели за алиасом TTS, а не от алиаса: при смене апстрима
 # старый голос даёт 400 Unknown voice. Список — подсказка, не жёсткое ограничение.
@@ -159,7 +166,80 @@ class BluOS:
     def status(self) -> dict[str, str | None]:
         xml = self.cmd("/Status")
         return {t: self._tag(xml, t)
-                for t in ("state", "serviceName", "title1", "song", "secs", "totlen")}
+                for t in ("state", "service", "serviceName", "title1", "song", "secs", "totlen",
+                          "inputId", "inputTypeIndex")}
+
+    def stop_confirmed(self, timeout: float = STOP_GRACE) -> bool:
+        """/Stop с подтверждением по /Status.
+
+        Ответ `<state>stop</state>` ничего не доказывает: короткий поток успевает
+        доиграть, а очередь — уехать на следующий трек. Поэтому состояние
+        перечитывается, а команда при необходимости повторяется.
+        """
+        deadline = time.time() + timeout
+        while True:
+            self.cmd("/Stop")
+            time.sleep(0.4)
+            st = self.status()
+            streaming = st.get("serviceName") is None and st.get("totlen") not in (None, "0")
+            if (st.get("state") or "").lower() not in ("play", "stream") and not streaming:
+                return True
+            if time.time() >= deadline:
+                return False
+
+
+def current_input(st: dict) -> str | None:
+    """id внешнего входа, если плеер стоит на нём (HDMI ARC, optical, …), иначе None."""
+    service = (st.get("service") or "").strip()
+    if service.lower() in EXTERNAL_INPUTS and st.get("inputId"):
+        return str(st["inputId"])
+    return None
+
+
+def restore_input(bluos: "BluOS", ext_input: str, was_state: str, report: dict) -> bool:
+    """Вернуть внешний вход (HDMI ARC, optical, …), на котором стоял плеер.
+
+    Штатная команда `/Play?inputId=<id>` переключает на вход, но всегда включает
+    его заново, поэтому state после неё `connecting`, а не `pause`. Если до
+    объявления вход был на паузе (телевизор выключен), `/Pause` на входе держится —
+    проверено: `connecting -> /Pause -> pause`, и в pause вход остаётся.
+    Возврат подтверждается чтением `/Status`: `service=Capture` и тот же `inputId`.
+    """
+    bluos.cmd(f"/Play?inputId={ext_input}")
+    ok = False
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        time.sleep(0.4)
+        st = bluos.status()
+        if (st.get("service") or "").lower() in EXTERNAL_INPUTS and str(st.get("inputId")) == str(ext_input):
+            ok = True
+            break
+    report["input_cmd"] = f"/Play?inputId={ext_input}"
+    report["input_restored"] = ok
+    if ok and was_state == "pause":
+        for _ in range(3):
+            bluos.cmd("/Pause")
+            time.sleep(0.4)
+            if (bluos.status().get("state") or "").lower() == "pause":
+                break
+        report["input_paused"] = (bluos.status().get("state") or "").lower() == "pause"
+    return ok
+
+
+def was_really_playing(st: dict) -> bool:
+    """Играло ли ДО объявления.
+
+    state=play/stream ещё не значит «звучит»: BluOS держит HDMI ARC в этом состоянии
+    часами при выключенном телевизоре. Своя очередь узнаётся по непустому serviceName;
+    внешний вход (service=Capture, serviceName пуст) считать «не играло» — иначе скрипт
+    уходит в resume-ветку, а /Play?seek&id переключает вход на очередь и включает музыку.
+    """
+    state = (st.get("state") or "").lower()
+    if state not in ("play", "stream"):
+        return False
+    if current_input(st):
+        return False
+    return bool(st.get("serviceName"))
 
 
 def push_file(local: str, remote_name: str, target: str | None, www_dir: str | None,
@@ -222,8 +302,13 @@ def announce(text: str, voice: str, cfg: dict) -> dict:
     was = (before.get("state") or "").lower()
     saved_song, saved_secs = before.get("song"), before.get("secs")
     # Играла ли музыка ДО объявления — это и определяет, что делать после:
-    # play/stream -> возобновляем с той же секунды; иначе (stop/pause/idle) -> пауза.
-    was_playing = was in ("play", "stream")
+    # play/stream на своей очереди -> возобновляем с той же секунды; иначе
+    # (stop/pause/idle, а также любой внешний вход) -> пауза.
+    was_playing = was_really_playing(before)
+    # Плеер стоял на внешнем входе (HDMI ARC/optical): после объявления его надо вернуть,
+    # а не оставлять на очереди, и обязательно в том состоянии, в котором застали
+    # (play/connecting с включённым телевизором, pause — с выключенным).
+    ext_input = current_input(before)
     had_track = saved_song is not None
 
     report: dict = {
@@ -233,6 +318,8 @@ def announce(text: str, voice: str, cfg: dict) -> dict:
         "action": "resume" if was_playing else "pause",
         "media_url": media_url,
     }
+    if ext_input:
+        report["external_input"] = f"{before.get('service')}:{ext_input}:{was}"
 
     if cfg["volume"] is not None:
         http(f"{cfg['hass_url'].rstrip('/')}/api/services/media_player/volume_set",
@@ -253,15 +340,14 @@ def announce(text: str, voice: str, cfg: dict) -> dict:
         if streaming and secs is not None:
             try:
                 if float(secs) >= float(totlen) - END_MARGIN:
-                    bluos.cmd("/Stop")
-                    stopped = True
+                    stopped = bluos.stop_confirmed()
                     break
             except ValueError:
                 pass
-        elif not streaming and time.time() > deadline - PLAY_TIMEOUT + 4:
+        elif not streaming and time.time() > deadline - PLAY_TIMEOUT + START_GRACE:
             break  # объявление даже не началось
     if not stopped:
-        bluos.cmd("/Stop")
+        stopped = bluos.stop_confirmed()
     report["stopped"] = stopped
 
     if was_playing and had_track:
@@ -283,11 +369,23 @@ def announce(text: str, voice: str, cfg: dict) -> dict:
                 seek_cmd = "/Play"
             bluos.cmd(seek_cmd)
             time.sleep(0.8)
-            bluos.cmd("/Pause")
+            # /Pause одним выстрелом может не встать: проверяем по /Status и повторяем,
+            # иначе музыка остаётся играть при пустой комнате.
+            for _ in range(3):
+                bluos.cmd("/Pause")
+                time.sleep(0.4)
+                if (bluos.status().get("state") or "").lower() not in ("play", "stream"):
+                    break
             report["restore_cmd"] = f"{seek_cmd} + /Pause"
         else:
             bluos.cmd("/Stop")
             report["restore_cmd"] = "/Stop"
+
+    # Плеер стоял на внешнем входе (HDMI ARC/optical): вернуть именно его, а не
+    # оставлять на очереди. Очередь к этому моменту уже поставлена на прежнее место
+    # и на паузу, поэтому переключение входа ничего не озвучивает.
+    if ext_input:
+        restore_input(bluos, ext_input, was, report)
     time.sleep(1.2)
     report["after"] = bluos.status()
 
